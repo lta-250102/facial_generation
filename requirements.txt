@@ -1,4 +1,9 @@
 # --------- pytorch --------- #
+--index-url https://download.pytorch.org/whl/cu118
+torch
+torchvision
+lightning
+torchmetrics
 # torch>=2.0.0
 # torchvision>=0.15.0
 # lightning>=2.0.0
@@ -22,3 +27,7 @@ pre-commit      # hooks for applying linters on commit
 rich            # beautiful text formatting in terminal
 pytest          # tests
 # sh            # for running bash commands in some tests (linux/macos only)
+albumentations
+scikit-learn
+diffusers
+transformers
