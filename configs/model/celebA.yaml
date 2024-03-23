@@ -1,0 +1,4 @@
+_target_: src.models.diffuser_module.DiffusionModule
+diffusion_pretrained: ./pretrained/awportrait_v13_half
+max_seq_len: 77
+fine_tune: False
