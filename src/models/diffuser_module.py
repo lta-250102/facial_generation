@@ -1,4 +1,4 @@
-from diffusers import UNet2DConditionModel, DDPMScheduler, AutoencoderKL
+from diffusers import UNet2DConditionModel, DDPMScheduler, AutoencoderKL, StableDiffusionPipeline
 from transformers import CLIPTextModel, CLIPTokenizer
 from lightning import LightningModule
 from PIL import Image
@@ -25,7 +25,12 @@ class DiffusionModule(LightningModule):
         self.vae_scale_factor = 2 ** (len(self.vae.config.block_out_channels) - 1)
 
     def forward(self, noise_images, timesteps, encoded_caption):
-        return self.unet(noise_images, timesteps, encoded_caption).sample
+        first_dtype = noise_images.dtype
+        first_device = noise_images.device
+        pred = self.unet(noise_images.to(dtype=self.unet.dtype, device=self.unet.device), 
+                         timesteps.to(dtype=self.unet.dtype, device=self.unet.device), 
+                         encoded_caption.to(dtype=self.unet.dtype, device=self.unet.device)).sample
+        return pred.to(dtype=first_dtype, device=first_device)
 
     @torch.no_grad()
     def preprocess(self, batch):
@@ -69,7 +74,7 @@ class DiffusionModule(LightningModule):
         loss = self.loss(noise_preds.float(), target.float(), reduction="mean")
         self.log('val_loss', loss)
 
-    def inference_step(self, prompt: list, max_timesteps=20, guidance_scale=7.5):
+    def old_inference_step(self, prompt: list, max_timesteps=20, guidance_scale=7.5, img_size=512):
         tokens = self.tokenizer(prompt, padding='max_length', return_tensors="pt", max_length=self.max_seq_len, truncation=True).to(self.encoder.device)
         prompt_embeds = self.encoder(**tokens).last_hidden_state.to(dtype=self.unet.dtype) # (1, 77, 768)
         
@@ -81,15 +86,14 @@ class DiffusionModule(LightningModule):
         self.scheduler.set_timesteps(max_timesteps)
         timesteps = self.scheduler.timesteps # (20,)
 
-        shape = (1, 4, 512//self.vae_scale_factor, 512//self.vae_scale_factor)
+        shape = (1, 4, img_size//self.vae_scale_factor, img_size//self.vae_scale_factor)
         layout = torch.strided
         latents = torch.randn(shape, dtype=self.unet.dtype, layout=layout) * self.scheduler.init_noise_sigma # (1, 4, 64, 64)
         
         for t in timesteps:
-            latent_model_input = torch.cat([latents] * 2) # (2, 4, 64, 64)
             latent_model_input = self.scheduler.scale_model_input(torch.cat([latents] * 2), t) # (2, 4, 64, 64)
             
-            noise_pred = self(latent_model_input.to(self.unet.device), t.to(self.unet.device), encoded_caption.to(self.unet.device)) # (2, 4, 64, 64)
+            noise_pred = self(latent_model_input, t, encoded_caption) # (2, 4, 64, 64)
             noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
             noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond) # (1, 4, 64, 64)
             
@@ -102,6 +106,10 @@ class DiffusionModule(LightningModule):
         image = (image * 255).round().astype("uint8")
         image = Image.fromarray(image[0])
         return image
+
+    def inference_step(self, prompt: list, max_timesteps=20, guidance_scale=7.5, img_size=512):
+        pipe = StableDiffusionPipeline(vae=self.vae, unet=self.unet, text_encoder=self.encoder, tokenizer=self.tokenizer, scheduler=self.scheduler, safety_checker=None, feature_extractor=None)
+        return pipe(prompt=prompt, height=img_size, width=img_size, num_inference_steps=max_timesteps, guidance_scale=guidance_scale).images[0]
 
     def on_train_epoch_end(self):
         prompt = ["The person in the picture is attractive, young, smiling. This person is with arched eyebrows, brown hair, straight hair, pointy nose, mouth slightly open, high cheekbones. This woman wears lipstick, earrings, heavy makeup."]
