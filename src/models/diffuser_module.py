@@ -89,7 +89,7 @@ class DiffusionModule(LightningModule):
             latent_model_input = torch.cat([latents] * 2) # (2, 4, 64, 64)
             latent_model_input = self.scheduler.scale_model_input(torch.cat([latents] * 2), t) # (2, 4, 64, 64)
             
-            noise_pred = self(latent_model_input, t, encoded_caption) # (2, 4, 64, 64)
+            noise_pred = self(latent_model_input.to(self.unet.device), t.to(self.unet.device), encoded_caption.to(self.unet.device)) # (2, 4, 64, 64)
             noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
             noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond) # (1, 4, 64, 64)
             
