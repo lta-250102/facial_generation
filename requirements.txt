@@ -1,6 +1,6 @@
 # --------- pytorch --------- #
 --find-links https://download.pytorch.org/whl/cu118/torch_stable.html
-torch==2.2.0+cu118
+torch==2.2.1
 torchvision
 lightning
 torchmetrics
