@@ -31,3 +31,4 @@ albumentations
 scikit-learn
 diffusers
 transformers
+accelerate
