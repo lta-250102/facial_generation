@@ -1,5 +1,6 @@
 _target_: src.data.celebA_datamodule.CelebAConditionalDataModule
-batch_size: 8
+batch_size: 32
 num_workers: 8
-text_file: ./data/celebA/captions_1000.json
-image_folder: ./data/celebA/img_align_celeba_1000
+caption_file: ./data/celebA/captions_1000.json
+image_folder: ./data/celebA/img_align_celeba
+attr_file: ./data/celebA/attrs.json

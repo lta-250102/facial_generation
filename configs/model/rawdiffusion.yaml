@@ -1,0 +1,2 @@
+_target_: src.models.diffuser_module.RawDiffusionModule
+diffusion_pretrained: ./pretrained/awportrait_v13_half
