@@ -10,9 +10,9 @@ import json
 import os
 
 class CelebAConditionalDataset(Dataset):
-    def __init__(self, image_name_list, captions, attrs, image_folder):
+    def __init__(self, image_name_list, captions, attrs, image_folder, img_size=(224, 224)):
         self.transform = albumentations.Compose([
-            albumentations.Resize(256, 256),
+            albumentations.Resize(img_size[0], img_size[1]),
             albumentations.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
             ToTensorV2(),
         ])
@@ -33,7 +33,7 @@ class CelebAConditionalDataset(Dataset):
         data = {
             'image': self.transform(image=image)['image'],
             'caption': self.captions.get(image_name, '').lower(),
-            'attr': torch.tensor(self.attrs.get(image_name, [0]*40))
+            'attr': torch.tensor(self.attrs.get(image_name, [0]*40), dtype=torch.float32),
         }
         return data
 
