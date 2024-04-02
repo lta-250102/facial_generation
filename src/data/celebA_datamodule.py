@@ -13,7 +13,7 @@ class CelebAConditionalDataset(Dataset):
     def __init__(self, image_name_list, captions, attrs, image_folder, img_size=(224, 224)):
         self.transform = albumentations.Compose([
             albumentations.Resize(img_size[0], img_size[1]),
-            albumentations.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
+            albumentations.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
             ToTensorV2(),
         ])
         self.image_folder = image_folder
