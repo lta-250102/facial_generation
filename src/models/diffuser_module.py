@@ -2,6 +2,7 @@ from diffusers import UNet2DConditionModel, DDPMScheduler, AutoencoderKL, Stable
 from transformers import CLIPTextModel, CLIPTokenizer
 from lightning import LightningModule
 from PIL import Image
+import wandb
 import torch
 import os
 
