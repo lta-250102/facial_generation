@@ -1,8 +1,11 @@
 from diffusers import UNet2DConditionModel, DDPMScheduler, AutoencoderKL, StableDiffusionPipeline
+from ldm.models.autoencoder import AutoencoderKL as LDMAutoencoderKL
+from ldm.modules.diffusionmodules.openaimodel import UNetModel
 from transformers import CLIPTextModel, CLIPTokenizer
 from lightning import LightningModule
+from diffusers import DDIMScheduler
 from PIL import Image
-import wandb
+import numpy as np
 import torch
 import os
 
@@ -217,6 +220,106 @@ class RawDiffusionModule(LightningModule):
         os.makedirs('./logs/outputs', exist_ok=True)
         id = len(os.listdir('./logs/outputs'))
         image.save(f'./logs/outputs/{id}.jpg')
+
+class CollaDiffusionModule(LightningModule):
+    def __init__(self, learning_rate = 1e-4, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.learning_rate = learning_rate
+        self.unet = UNetModel(image_size=64, in_channels=3, out_channels=3, 
+                 model_channels=192, attention_resolutions=[8, 4, 2], 
+                 num_res_blocks=2, channel_mult=[1, 2, 3, 5], num_heads=32, 
+                 use_spatial_transformer=True, transformer_depth=1, context_dim=640, 
+                 use_checkpoint=True, legacy=False)
+        self.unet.load_state_dict(torch.load('./pretrained/unet.pt'))
+        self.vae = LDMAutoencoderKL(embed_dim=3, 
+                                 ckpt_path='./pretrained/256_vae.ckpt',
+                                 lossconfig={'target': 'torch.nn.Identity'},
+                                 ddconfig={
+                                    'double_z':True,
+                                    'z_channels':3,
+                                    'resolution':256,
+                                    'in_channels':3,
+                                    'out_ch':3,
+                                    'ch':128,
+                                    'ch_mult':[1, 2, 4],
+                                    'num_res_blocks':2,
+                                    'attn_resolutions':[],
+                                    'dropout':0.0
+                                 })
+        self.unet.requires_grad_(False)
+        self.vae.requires_grad_(False)
+        self.embeder = torch.nn.Embedding(2, 640)
+
+        self.logvar = torch.full(fill_value=0., size=(1000,))
+        self.scheduler = DDIMScheduler(num_train_timesteps=1000, beta_start=1e-4, beta_end=2e-2, beta_schedule='linear')
+
+    def forward(self, clean_images, attr):
+        timestep = torch.randint(0, 1000, (clean_images.shape[0],), dtype=torch.int64, device='cuda')
+        noise = torch.rand_like(clean_images)
+        latents = self.scheduler.add_noise(clean_images, noise, timestep)
+        condition = self.embeder(((attr+1)/2).long())
+        noise_pred = self.unet(latents, timestep, context=condition)
+        
+        prefix = 'train' if self.training else 'val'
+        loss_dict = {}
+
+        loss_simple = torch.nn.functional.mse_loss(noise, noise_pred).mean([1, 2, 3])
+        loss_dict.update({f'{prefix}/loss_simple': loss_simple.mean()})
+        logvar_t = self.logvar[timestep].to(self.device)
+        loss = loss_simple / torch.exp(logvar_t) + logvar_t
+        loss_dict.update({f'{prefix}/loss': loss})
+        return loss, loss_dict
+    
+    def share_step(self, batch):
+        clean_images, attr = batch['image'], (batch['attr']+1)/2
+        loss, loss_dict = self(clean_images, attr)
+        self.log_dict(loss_dict, prog_bar=True, logger=True, on_step=True, on_epoch=True)
+        return loss
+    
+    def training_step(self, batch, batch_idx):
+        self.embeder.train()
+        return self.share_step(batch)
+    
+    def validation_step(self, batch, batch_idx):
+        self.embeder.eval()
+        return self.share_step(batch)
+    
+    def gen_image(self, attr):
+        attr_embed = self.embeder(((attr+1)/2).long())
+        cond = torch.cat([torch.zeros(attr_embed.shape, device=self.unet.device), attr_embed.to(self.unet.device)], dim=0)
+        self.scheduler.set_timesteps(20)
+        timesteps = self.scheduler.timesteps # (20,)
+        latents = torch.randn((1, 3, 64, 64), dtype=self.unet.dtype, device=self.unet.device)
+        
+        for t in timesteps:
+            latent_model_input = self.scheduler.scale_model_input(torch.cat([latents] * 2), t) # (2, 4, 64, 64)
+            
+            noise_pred = self(latent_model_input, t, cond) # (2, 4, 64, 64)
+            noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+            noise_pred = noise_pred_uncond + 7.5 * (noise_pred_text - noise_pred_uncond) # (1, 3, 64, 64)
+            
+            latents = self.scheduler.step(noise_pred, t, latents, return_dict=False)[0]
+        x_0_batch = self.vae.decode(latents)
+
+        x_0 = x_0_batch[0, :, :, :].unsqueeze(0)  # [1, 3, 256, 256]
+        x_0 = x_0.permute(0, 2, 3, 1).to('cpu').numpy()
+        x_0 = (x_0 + 1.0) * 127.5
+        np.clip(x_0, 0, 255, out=x_0)  # clip to range 0 to 255
+        x_0 = x_0.astype(np.uint8)
+        image = Image.fromarray(x_0[0])
+        return image
+    
+    def on_train_epoch_start(self):
+        attr = torch.tensor([[-1, 1, 1, -1, -1, -1, -1, -1, -1, -1, -1, 1, -1, -1, -1, -1, -1, -1, 1, 1, -1, 1, -1, -1, 1, -1, -1, 1, -1, -1, -1, 1, 1, -1, 1, -1, 1, -1, -1, 1]]).to(self.embeder.weight.device)
+        image = self.gen_image(attr)
+    
+        os.makedirs('./logs/outputs', exist_ok=True)
+        id = len(os.listdir('./logs/outputs'))
+        image.save(f'./logs/outputs/{id}.jpg')
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.AdamW(self.parameters(), lr=self.learning_rate)
+        return optimizer
 
 if __name__ == '__main__':
     model = RawDiffusionModule(diffusion_pretrained='./pretrained/awportrait_v13_half', emb_dim=64)
