@@ -259,6 +259,9 @@ class CollaDiffusionModule(LightningModule):
         noise = torch.rand_like(clean_images)
         latents = self.scheduler.add_noise(clean_images, noise, timestep).to('cuda')
         condition = self.embeder(((attr+1)/2).long()).to('cuda')
+        print(f'timestep: {timestep.shape}, {timestep.device}, {timestep.dtype}')
+        print(f'latents: {latents.shape}, {latents.device}, {latents.dtype}')
+        print(f'condition: {condition.shape}, {condition.device}, {condition.dtype}')
         noise_pred = self.unet(latents, timestep, context=condition)
         
         prefix = 'train' if self.training else 'val'
