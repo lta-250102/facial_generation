@@ -250,6 +250,7 @@ class CollaDiffusionModule(LightningModule):
         self.unet.requires_grad_(False)
         self.vae.requires_grad_(False)
         self.embeder = torch.nn.Embedding(2, 640)
+        self.linear = torch.nn.Linear(40, 77, bias=False)
 
         self.logvar = torch.full(fill_value=0., size=(1000,))
         self.scheduler = DDIMScheduler(num_train_timesteps=1000, beta_start=1e-4, beta_end=2e-2, beta_schedule='linear')
@@ -258,7 +259,8 @@ class CollaDiffusionModule(LightningModule):
         timestep = torch.randint(0, 1000, (clean_images.shape[0],), dtype=torch.int64, device='cuda')
         noise = torch.rand_like(clean_images)
         latents = self.scheduler.add_noise(clean_images, noise, timestep).to('cuda')
-        condition = self.embeder(((attr+1)/2).long()).to('cuda')
+        condition = self.embeder(((attr+1)/2).to(torch.int32))
+        condition = self.linear(condition.transpose(-1, -2)).transpose(-1, -2).to('cuda')
         noise_pred = self.unet(latents, timestep, context=condition)
         
         prefix = 'train' if self.training else 'val'
