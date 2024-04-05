@@ -32,6 +32,6 @@ scikit-learn
 diffusers
 transformers
 accelerate
-# einops==0.3.0
-# -e git+https://github.com/CompVis/taming-transformers.git@master#egg=taming-transformers
-# -e git+https://github.com/openai/CLIP.git@main#egg=clip
+einops==0.3.0
+-e git+https://github.com/CompVis/taming-transformers.git@master#egg=taming-transformers
+-e git+https://github.com/openai/CLIP.git@main#egg=clip
