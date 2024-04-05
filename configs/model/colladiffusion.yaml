@@ -1,1 +1,4 @@
 _target_: src.models.diffuser_module.CollaDiffusionModule
+learning_rate: 1e-4
+unet_path: ./pretrained/unet.pt
+vae_path: ./pretrained/256_vae.ckpt

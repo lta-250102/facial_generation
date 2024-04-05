@@ -222,7 +222,7 @@ class RawDiffusionModule(LightningModule):
         image.save(f'./logs/outputs/{id}.jpg')
 
 class CollaDiffusionModule(LightningModule):
-    def __init__(self, learning_rate = 1e-4, *args, **kwargs) -> None:
+    def __init__(self, learning_rate = 1e-4, unet_path = './pretrained/unet.pt', vae_path = './pretrained/256_vae.ckpt', *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         assert torch.cuda.is_available(), 'cuda unavailable'
         self.learning_rate = learning_rate
@@ -231,9 +231,9 @@ class CollaDiffusionModule(LightningModule):
                  num_res_blocks=2, channel_mult=[1, 2, 3, 5], num_heads=32, 
                  use_spatial_transformer=True, transformer_depth=1, context_dim=640, 
                  use_checkpoint=True, legacy=False).cuda()
-        self.unet.load_state_dict(torch.load('./pretrained/unet.pt'))
+        self.unet.load_state_dict(torch.load(unet_path))
         self.vae = LDMAutoencoderKL(embed_dim=3, 
-                                 ckpt_path='./pretrained/256_vae.ckpt',
+                                 ckpt_path=vae_path,
                                  lossconfig={'target': 'torch.nn.Identity'},
                                  ddconfig={
                                     'double_z':True,
