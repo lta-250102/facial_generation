@@ -158,6 +158,6 @@ configs/local/default.yaml
 
 /draft/
 
-# clip/
+clip/
 
-# taming-transformers/
+taming-transformers/
