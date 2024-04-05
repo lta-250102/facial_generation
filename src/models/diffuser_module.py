@@ -224,12 +224,13 @@ class RawDiffusionModule(LightningModule):
 class CollaDiffusionModule(LightningModule):
     def __init__(self, learning_rate = 1e-4, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
+        assert torch.cuda.is_available(), 'cuda unavailable'
         self.learning_rate = learning_rate
         self.unet = UNetModel(image_size=64, in_channels=3, out_channels=3, 
                  model_channels=192, attention_resolutions=[8, 4, 2], 
                  num_res_blocks=2, channel_mult=[1, 2, 3, 5], num_heads=32, 
                  use_spatial_transformer=True, transformer_depth=1, context_dim=640, 
-                 use_checkpoint=True, legacy=False)
+                 use_checkpoint=True, legacy=False).cuda()
         self.unet.load_state_dict(torch.load('./pretrained/unet.pt'))
         self.vae = LDMAutoencoderKL(embed_dim=3, 
                                  ckpt_path='./pretrained/256_vae.ckpt',
@@ -286,15 +287,15 @@ class CollaDiffusionModule(LightningModule):
     
     def gen_image(self, attr):
         attr_embed = self.embeder(((attr+1)/2).long())
-        cond = torch.cat([torch.zeros(attr_embed.shape, device=self.unet.device), attr_embed.to(self.unet.device)], dim=0)
+        cond = torch.cat([torch.zeros(attr_embed.shape).to(attr_embed.device), attr_embed], dim=0).to('cuda')
         self.scheduler.set_timesteps(20)
-        timesteps = self.scheduler.timesteps # (20,)
-        latents = torch.randn((1, 3, 64, 64), dtype=self.unet.dtype, device=self.unet.device)
+        timesteps = self.scheduler.timesteps.to('cuda') # (20,)
+        latents = torch.randn((1, 3, 64, 64), dtype=self.unet.dtype, device='cuda')
         
         for t in timesteps:
-            latent_model_input = self.scheduler.scale_model_input(torch.cat([latents] * 2), t) # (2, 4, 64, 64)
+            latent_model_input = self.scheduler.scale_model_input(torch.cat([latents] * 2), t) # (2, 3, 64, 64)
             
-            noise_pred = self(latent_model_input, t, cond) # (2, 4, 64, 64)
+            noise_pred = self.unet(latent_model_input, t.unsqueeze(-1), cond) # (2, 3, 64, 64)
             noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
             noise_pred = noise_pred_uncond + 7.5 * (noise_pred_text - noise_pred_uncond) # (1, 3, 64, 64)
             
@@ -322,5 +323,5 @@ class CollaDiffusionModule(LightningModule):
         return optimizer
 
 if __name__ == '__main__':
-    model = RawDiffusionModule(diffusion_pretrained='./pretrained/awportrait_v13_half', emb_dim=64)
+    model = CollaDiffusionModule()
     model.on_train_epoch_start()
