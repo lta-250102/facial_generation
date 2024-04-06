@@ -230,61 +230,57 @@ class CollaDiffusionModule(LightningModule):
                  model_channels=192, attention_resolutions=[8, 4, 2], 
                  num_res_blocks=2, channel_mult=[1, 2, 3, 5], num_heads=32, 
                  use_spatial_transformer=True, transformer_depth=1, context_dim=640, 
-                 use_checkpoint=True, legacy=False).cuda()
+                 use_checkpoint=True, legacy=False)
         self.unet.load_state_dict(torch.load(unet_path))
         self.vae = LDMAutoencoderKL(embed_dim=3, 
-                                 ckpt_path=vae_path,
-                                 lossconfig={'target': 'torch.nn.Identity'},
-                                 ddconfig={
-                                    'double_z':True,
-                                    'z_channels':3,
-                                    'resolution':256,
-                                    'in_channels':3,
-                                    'out_ch':3,
-                                    'ch':128,
-                                    'ch_mult':[1, 2, 4],
-                                    'num_res_blocks':2,
-                                    'attn_resolutions':[],
-                                    'dropout':0.0
-                                 })
+                                    ckpt_path=vae_path,
+                                    lossconfig={'target': 'torch.nn.Identity'},
+                                    ddconfig={
+                                        'double_z':True,
+                                        'z_channels':3,
+                                        'resolution':256,
+                                        'in_channels':3,
+                                        'out_ch':3,
+                                        'ch':128,
+                                        'ch_mult':[1, 2, 4],
+                                        'num_res_blocks':2,
+                                        'attn_resolutions':[],
+                                        'dropout':0.0
+                                    })
         self.unet.requires_grad_(False)
         self.vae.requires_grad_(False)
         self.embeder = torch.nn.Embedding(2, 640)
         self.linear = torch.nn.Linear(40, 77, bias=False)
-
-        self.logvar = torch.full(fill_value=0., size=(1000,))
         self.scheduler = DDIMScheduler(num_train_timesteps=1000, beta_start=1e-4, beta_end=2e-2, beta_schedule='linear')
 
-    def forward(self, clean_images, attr):
-        timestep = torch.randint(0, 1000, (clean_images.shape[0],), dtype=torch.int64, device='cuda')
-        noise = torch.rand_like(clean_images)
-        latents = self.scheduler.add_noise(clean_images, noise, timestep).to('cuda')
-        condition = self.embeder(((attr+1)/2).to(torch.int32))
-        condition = self.linear(condition.transpose(-1, -2)).transpose(-1, -2).to('cuda')
+    def forward(self, clean_images: torch.Tensor, attr: torch.Tensor):
+        clean_images = clean_images.to(dtype=self.dtype, device=self.device)
+        attr = ((attr+1)/2).to(dtype=torch.int32, device=self.device)
+
+        timestep = torch.randint(0, 1000, (clean_images.shape[0],), dtype=torch.int32, device=self.device)
+        noise = torch.rand_like(clean_images, device=self.device, dtype=self.dtype)
+        latents = self.scheduler.add_noise(clean_images, noise, timestep)
+        condition = self.linear(self.embeder(attr).transpose(-1, -2)).transpose(-1, -2)
+        
         noise_pred = self.unet(latents, timestep, context=condition)
         
-        prefix = 'train' if self.training else 'val'
-        loss_dict = {}
-
-        loss_simple = torch.nn.functional.mse_loss(noise, noise_pred).mean([1, 2, 3])
-        loss_dict.update({f'{prefix}/loss_simple': loss_simple.mean()})
-        logvar_t = self.logvar[timestep].to(self.device)
-        loss = loss_simple / torch.exp(logvar_t) + logvar_t
-        loss_dict.update({f'{prefix}/loss': loss})
-        return loss, loss_dict
+        loss = torch.nn.functional.mse_loss(noise, noise_pred, reduction='none').mean([1, 2, 3]).mean()
+        self.log(f"{'train' if self.training else 'val'}_loss", loss)
+        return loss
     
     def share_step(self, batch):
         clean_images, attr = batch['image'], (batch['attr']+1)/2
-        loss, loss_dict = self(clean_images, attr)
-        self.log_dict(loss_dict, prog_bar=True, logger=True, on_step=True, on_epoch=True)
+        loss = self(clean_images, attr)
         return loss
     
     def training_step(self, batch, batch_idx):
         self.embeder.train()
+        self.linear.train()
         return self.share_step(batch)
     
     def validation_step(self, batch, batch_idx):
         self.embeder.eval()
+        self.linear.eval()
         return self.share_step(batch)
     
     def gen_image(self, attr):
