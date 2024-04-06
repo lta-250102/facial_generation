@@ -323,7 +323,7 @@ class CollaDiffusionModule(LightningModule):
         image = self.gen_image(attr)
     
         if self.trainer and self.trainer.logger and isinstance(self.trainer.logger, WandbLogger):
-            self.trainer.logger.log_image('sample', image)
+            self.trainer.logger.log_image('sample', [image])
         else:
             os.makedirs('./logs/samples', exist_ok=True)
             id = len(os.listdir('./logs/samples'))
