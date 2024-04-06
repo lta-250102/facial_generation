@@ -250,8 +250,6 @@ class CollaDiffusionModule(LightningModule):
                                         'attn_resolutions':[],
                                         'dropout':0.0
                                     })
-        self.unet.requires_grad_(False)
-        self.vae.requires_grad_(False)
         self.embeder = torch.nn.Embedding(2, 640)
         self.linear = torch.nn.Linear(40, 77, bias=False)
         self.scheduler = DDIMScheduler(num_train_timesteps=1000, beta_start=1e-4, beta_end=2e-2, beta_schedule='linear')
@@ -330,7 +328,12 @@ class CollaDiffusionModule(LightningModule):
             image.save(f'./logs/samples/{id}.jpg')
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.parameters(), lr=self.learning_rate)
+        params = []
+        for param in self.linear.parameters():
+            params.append(param)
+        for param in self.embeder.parameters():
+            params.append(param)
+        optimizer = torch.optim.AdamW(params, lr=self.learning_rate)
         return optimizer
 
 if __name__ == '__main__':
