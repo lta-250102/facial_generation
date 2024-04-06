@@ -2,9 +2,11 @@ from diffusers import UNet2DConditionModel, DDPMScheduler, AutoencoderKL, Stable
 from ldm.models.autoencoder import AutoencoderKL as LDMAutoencoderKL
 from ldm.modules.diffusionmodules.openaimodel import UNetModel
 from transformers import CLIPTextModel, CLIPTokenizer
+from lightning.pytorch.loggers import WandbLogger
 from lightning import LightningModule
 from diffusers import DDIMScheduler
 from PIL import Image
+from tqdm import tqdm
 import numpy as np
 import torch
 import os
@@ -222,7 +224,7 @@ class RawDiffusionModule(LightningModule):
         image.save(f'./logs/outputs/{id}.jpg')
 
 class CollaDiffusionModule(LightningModule):
-    def __init__(self, learning_rate = 1e-4, unet_path = './pretrained/unet.pt', vae_path = './pretrained/256_vae.ckpt', *args, **kwargs) -> None:
+    def __init__(self, learning_rate = 1e-4, unet_path = './pretrained/unet.pt', vae_path = './pretrained/256_vae.ckpt', fine_tune = True, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         assert torch.cuda.is_available(), 'cuda unavailable'
         self.learning_rate = learning_rate
@@ -231,9 +233,10 @@ class CollaDiffusionModule(LightningModule):
                  num_res_blocks=2, channel_mult=[1, 2, 3, 5], num_heads=32, 
                  use_spatial_transformer=True, transformer_depth=1, context_dim=640, 
                  use_checkpoint=True, legacy=False)
-        self.unet.load_state_dict(torch.load(unet_path))
+        if fine_tune:
+            self.unet.load_state_dict(torch.load(unet_path))
         self.vae = LDMAutoencoderKL(embed_dim=3, 
-                                    ckpt_path=vae_path,
+                                    ckpt_path=vae_path if fine_tune else None,
                                     lossconfig={'target': 'torch.nn.Identity'},
                                     ddconfig={
                                         'double_z':True,
@@ -252,19 +255,21 @@ class CollaDiffusionModule(LightningModule):
         self.embeder = torch.nn.Embedding(2, 640)
         self.linear = torch.nn.Linear(40, 77, bias=False)
         self.scheduler = DDIMScheduler(num_train_timesteps=1000, beta_start=1e-4, beta_end=2e-2, beta_schedule='linear')
+        self.scale_factor = 0.058
 
     def forward(self, clean_images: torch.Tensor, attr: torch.Tensor):
         clean_images = clean_images.to(dtype=self.dtype, device=self.device)
         attr = ((attr+1)/2).to(dtype=torch.int32, device=self.device)
 
+        clean_images_encoded = self.vae.encode(clean_images).sample() * self.scale_factor
         timestep = torch.randint(0, 1000, (clean_images.shape[0],), dtype=torch.int32, device=self.device)
-        noise = torch.rand_like(clean_images, device=self.device, dtype=self.dtype)
-        latents = self.scheduler.add_noise(clean_images, noise, timestep)
+        noise = torch.rand_like(clean_images_encoded, device=self.device, dtype=self.dtype)
+        latents = self.scheduler.add_noise(clean_images_encoded, noise, timestep) * self.scheduler.init_noise_sigma
         condition = self.linear(self.embeder(attr).transpose(-1, -2)).transpose(-1, -2)
         
         noise_pred = self.unet(latents, timestep, context=condition)
         
-        loss = torch.nn.functional.mse_loss(noise, noise_pred, reduction='none').mean([1, 2, 3]).mean()
+        loss = torch.nn.functional.mse_loss(noise, noise_pred)
         self.log(f"{'train' if self.training else 'val'}_loss", loss)
         return loss
     
@@ -283,22 +288,27 @@ class CollaDiffusionModule(LightningModule):
         self.linear.eval()
         return self.share_step(batch)
     
+    @torch.no_grad()
     def gen_image(self, attr):
-        attr_embed = self.embeder(((attr+1)/2).long())
-        cond = torch.cat([torch.zeros(attr_embed.shape).to(attr_embed.device), attr_embed], dim=0).to('cuda')
+        guidance_scale = True
+        attr = ((attr+1)/2).to(dtype=torch.int32, device=self.device)        
+
+        attr_embed = self.linear(self.embeder(attr).transpose(-1, -2)).transpose(-1, -2)
+        cond = torch.cat([torch.zeros(attr_embed.shape).to(device=attr_embed.device, dtype=attr_embed.dtype), attr_embed], dim=0) if guidance_scale else attr_embed # (2, 77, 640)
         self.scheduler.set_timesteps(20)
-        timesteps = self.scheduler.timesteps.to('cuda') # (20,)
-        latents = torch.randn((1, 3, 64, 64), dtype=self.unet.dtype, device='cuda')
+        timesteps = self.scheduler.timesteps.to(device=self.device) # (20,)
+        latents = torch.randn((1, 3, 64, 64), device=self.device, dtype=self.dtype) * self.scheduler.init_noise_sigma
         
-        for t in timesteps:
-            latent_model_input = self.scheduler.scale_model_input(torch.cat([latents] * 2), t) # (2, 3, 64, 64)
+        for t in tqdm(timesteps):
+            latent_model_input = self.scheduler.scale_model_input(torch.cat([latents] * 2) if guidance_scale else latents, t) # (2, 3, 64, 64)
             
             noise_pred = self.unet(latent_model_input, t.unsqueeze(-1), cond) # (2, 3, 64, 64)
-            noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-            noise_pred = noise_pred_uncond + 7.5 * (noise_pred_text - noise_pred_uncond) # (1, 3, 64, 64)
+            if guidance_scale:
+                noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+                noise_pred = noise_pred_uncond + 7.5 * (noise_pred_text - noise_pred_uncond) # (1, 3, 64, 64)
             
             latents = self.scheduler.step(noise_pred, t, latents, return_dict=False)[0]
-        x_0_batch = self.vae.decode(latents)
+        x_0_batch = self.vae.decode(latents/self.scale_factor)
 
         x_0 = x_0_batch[0, :, :, :].unsqueeze(0)  # [1, 3, 256, 256]
         x_0 = x_0.permute(0, 2, 3, 1).to('cpu').numpy()
@@ -312,6 +322,8 @@ class CollaDiffusionModule(LightningModule):
         attr = torch.tensor([[-1, 1, 1, -1, -1, -1, -1, -1, -1, -1, -1, 1, -1, -1, -1, -1, -1, -1, 1, 1, -1, 1, -1, -1, 1, -1, -1, 1, -1, -1, -1, 1, 1, -1, 1, -1, 1, -1, -1, 1]]).to(self.embeder.weight.device)
         image = self.gen_image(attr)
     
+        # if self.trainer and self.trainer.logger and isinstance(self.trainer.logger, WandbLogger):
+        #     pass
         os.makedirs('./logs/outputs', exist_ok=True)
         id = len(os.listdir('./logs/outputs'))
         image.save(f'./logs/outputs/{id}.jpg')
