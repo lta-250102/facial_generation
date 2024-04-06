@@ -269,7 +269,7 @@ class CollaDiffusionModule(LightningModule):
         
         noise_pred = self.unet(latents, timestep, context=condition)
         
-        loss = torch.nn.functional.mse_loss(noise, noise_pred)
+        loss = torch.nn.functional.mse_loss(noise, noise_pred.to(dtype=noise.dtype))
         self.log(f"{'train' if self.training else 'val'}_loss", loss)
         return loss
     
@@ -322,11 +322,12 @@ class CollaDiffusionModule(LightningModule):
         attr = torch.tensor([[-1, 1, 1, -1, -1, -1, -1, -1, -1, -1, -1, 1, -1, -1, -1, -1, -1, -1, 1, 1, -1, 1, -1, -1, 1, -1, -1, 1, -1, -1, -1, 1, 1, -1, 1, -1, 1, -1, -1, 1]]).to(self.embeder.weight.device)
         image = self.gen_image(attr)
     
-        # if self.trainer and self.trainer.logger and isinstance(self.trainer.logger, WandbLogger):
-        #     pass
-        os.makedirs('./logs/outputs', exist_ok=True)
-        id = len(os.listdir('./logs/outputs'))
-        image.save(f'./logs/outputs/{id}.jpg')
+        if self.trainer and self.trainer.logger and isinstance(self.trainer.logger, WandbLogger):
+            self.trainer.logger.log_image('sample', image)
+        else:
+            os.makedirs('./logs/samples', exist_ok=True)
+            id = len(os.listdir('./logs/samples'))
+            image.save(f'./logs/samples/{id}.jpg')
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.learning_rate)
