@@ -223,6 +223,22 @@ class RawDiffusionModule(LightningModule):
         id = len(os.listdir('./logs/outputs'))
         image.save(f'./logs/outputs/{id}.jpg')
 
+
+class AttrEmbedding(torch.nn.Module):
+    def __init__(self, emb_dim = 640, seq_len = 77, n_attrs = 40, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.pa = torch.nn.Parameter(torch.rand((1, emb_dim, n_attrs)))
+        self.linear = torch.nn.Linear(n_attrs, seq_len, bias=False)
+        self.silu = torch.nn.SiLU()
+
+    def forward(self, attr):
+        ''' attr: int (batch_size, n_attrs) '''
+        batch_size = attr.shape[0]
+        cond = torch.cat([attr[i] * self.pa for i in range(batch_size)])
+        cond = self.silu(cond)
+        cond = self.linear(cond).transpose(-1, -2)
+        return cond
+
 class CollaDiffusionModule(LightningModule):
     def __init__(self, learning_rate = 1e-4, unet_path = './pretrained/unet.pt', vae_path = './pretrained/256_vae.ckpt', fine_tune = True, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
@@ -250,20 +266,19 @@ class CollaDiffusionModule(LightningModule):
                                         'attn_resolutions':[],
                                         'dropout':0.0
                                     })
-        self.embeder = torch.nn.Embedding(2, 640)
-        self.linear = torch.nn.Linear(40, 77, bias=False)
+        self.embeder = AttrEmbedding()
         self.scheduler = DDIMScheduler(num_train_timesteps=1000, beta_start=1e-4, beta_end=2e-2, beta_schedule='linear')
         self.scale_factor = 0.058
 
-    def forward(self, clean_images: torch.Tensor, attr: torch.Tensor):
-        clean_images = clean_images.to(dtype=self.dtype, device=self.device)
-        attr = ((attr+1)/2).to(dtype=torch.int32, device=self.device)
+    def forward(self, batch):
+        clean_images = batch['image'].to(dtype=self.dtype, device=self.device)
+        attr = ((batch['attr']+1)/2).to(dtype=torch.int32, device=self.device)
 
         clean_images_encoded = self.vae.encode(clean_images).sample() * self.scale_factor
         timestep = torch.randint(0, 1000, (clean_images.shape[0],), dtype=torch.int32, device=self.device)
         noise = torch.rand_like(clean_images_encoded, device=self.device, dtype=self.dtype)
         latents = self.scheduler.add_noise(clean_images_encoded, noise, timestep) * self.scheduler.init_noise_sigma
-        condition = self.linear(self.embeder(attr).transpose(-1, -2)).transpose(-1, -2)
+        condition = self.embeder(attr)
         
         noise_pred = self.unet(latents, timestep, context=condition)
         
@@ -271,27 +286,18 @@ class CollaDiffusionModule(LightningModule):
         self.log(f"{'train' if self.training else 'val'}_loss", loss)
         return loss
     
-    def share_step(self, batch):
-        clean_images, attr = batch['image'], (batch['attr']+1)/2
-        loss = self(clean_images, attr)
-        return loss
-    
-    def training_step(self, batch, batch_idx):
-        self.embeder.train()
-        self.linear.train()
-        return self.share_step(batch)
-    
-    def validation_step(self, batch, batch_idx):
-        self.embeder.eval()
-        self.linear.eval()
-        return self.share_step(batch)
-    
+    def training_step(self, batch):
+        return self(batch)
+
+    def validation_step(self, batch):
+        return self(batch)
+
     @torch.no_grad()
     def gen_image(self, attr):
         guidance_scale = True
         attr = ((attr+1)/2).to(dtype=torch.int32, device=self.device)        
 
-        attr_embed = self.linear(self.embeder(attr).transpose(-1, -2)).transpose(-1, -2)
+        attr_embed = self.embeder(attr)
         cond = torch.cat([torch.zeros(attr_embed.shape).to(device=attr_embed.device, dtype=attr_embed.dtype), attr_embed], dim=0) if guidance_scale else attr_embed # (2, 77, 640)
         self.scheduler.set_timesteps(20)
         timesteps = self.scheduler.timesteps.to(device=self.device) # (20,)
@@ -317,7 +323,7 @@ class CollaDiffusionModule(LightningModule):
         return image
     
     def on_train_epoch_start(self):
-        attr = torch.tensor([[-1, 1, 1, -1, -1, -1, -1, -1, -1, -1, -1, 1, -1, -1, -1, -1, -1, -1, 1, 1, -1, 1, -1, -1, 1, -1, -1, 1, -1, -1, -1, 1, 1, -1, 1, -1, 1, -1, -1, 1]]).to(self.embeder.weight.device)
+        attr = torch.tensor([[-1, 1, 1, -1, -1, -1, -1, -1, -1, -1, -1, 1, -1, -1, -1, -1, -1, -1, 1, 1, -1, 1, -1, -1, 1, -1, -1, 1, -1, -1, -1, 1, 1, -1, 1, -1, 1, -1, -1, 1]])
         image = self.gen_image(attr)
     
         if self.trainer and self.trainer.logger and isinstance(self.trainer.logger, WandbLogger):
@@ -328,12 +334,7 @@ class CollaDiffusionModule(LightningModule):
             image.save(f'./logs/samples/{id}.jpg')
 
     def configure_optimizers(self):
-        params = []
-        for param in self.linear.parameters():
-            params.append(param)
-        for param in self.embeder.parameters():
-            params.append(param)
-        optimizer = torch.optim.AdamW(params, lr=self.learning_rate)
+        optimizer = torch.optim.AdamW(self.embeder.parameters(), lr=self.learning_rate)
         return optimizer
 
 if __name__ == '__main__':
