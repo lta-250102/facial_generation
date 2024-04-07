@@ -3,6 +3,7 @@ from ldm.models.autoencoder import AutoencoderKL as LDMAutoencoderKL
 from ldm.modules.diffusionmodules.openaimodel import UNetModel
 from transformers import CLIPTextModel, CLIPTokenizer
 from lightning.pytorch.loggers import WandbLogger
+from components.attr_embeder import AttrEmbedding
 from lightning import LightningModule
 from diffusers import DDIMScheduler
 from PIL import Image
@@ -222,22 +223,6 @@ class RawDiffusionModule(LightningModule):
         os.makedirs('./logs/outputs', exist_ok=True)
         id = len(os.listdir('./logs/outputs'))
         image.save(f'./logs/outputs/{id}.jpg')
-
-
-class AttrEmbedding(torch.nn.Module):
-    def __init__(self, emb_dim = 640, seq_len = 77, n_attrs = 40, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-        self.pa = torch.nn.Parameter(torch.rand((1, emb_dim, n_attrs)))
-        self.linear = torch.nn.Linear(n_attrs, seq_len, bias=False)
-        self.silu = torch.nn.SiLU()
-
-    def forward(self, attr):
-        ''' attr: int (batch_size, n_attrs) '''
-        batch_size = attr.shape[0]
-        cond = torch.cat([attr[i] * self.pa for i in range(batch_size)])
-        cond = self.silu(cond)
-        cond = self.linear(cond).transpose(-1, -2)
-        return cond
 
 class CollaDiffusionModule(LightningModule):
     def __init__(self, learning_rate = 1e-4, unet_path = './pretrained/unet.pt', vae_path = './pretrained/256_vae.ckpt', fine_tune = True, *args, **kwargs) -> None:
