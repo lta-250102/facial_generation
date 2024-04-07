@@ -65,7 +65,7 @@ class CelebAConditionalDataModule(LightningDataModule):
                 self.attrs = json.load(f)
                 
         # list of valid image names & train test split
-        self.image_name_list = self.cal_img_name_list(image_folder, caption_file, attr_file)
+        self.image_name_list = self.cal_img_name_list(image_folder)
         self.train_name_list, self.val_name_list = train_test_split(self.image_name_list, test_size=0.02, random_state=42)
         self.image_folder = image_folder
 

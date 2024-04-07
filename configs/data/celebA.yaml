@@ -4,4 +4,4 @@ num_workers: 8
 caption_file: ./data/celebA/captions.json
 image_folder: ./data/celebA/img_align_celeba
 attr_file: ./data/celebA/attrs.json
-keys: ['image', 'attr']
+keys: ['caption', 'attr']

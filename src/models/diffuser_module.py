@@ -1,9 +1,9 @@
 from diffusers import UNet2DConditionModel, DDPMScheduler, AutoencoderKL, StableDiffusionPipeline
 from ldm.models.autoencoder import AutoencoderKL as LDMAutoencoderKL
 from ldm.modules.diffusionmodules.openaimodel import UNetModel
+from src.models.components.attr_embeder import AttrEmbedding
 from transformers import CLIPTextModel, CLIPTokenizer
 from lightning.pytorch.loggers import WandbLogger
-from components.attr_embeder import AttrEmbedding
 from lightning import LightningModule
 from diffusers import DDIMScheduler
 from PIL import Image

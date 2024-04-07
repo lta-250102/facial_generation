@@ -1,5 +1,5 @@
 from ldm.modules.encoders.modules import BERTEmbedder
-from components.attr_embeder import AttrEmbedding
+from src.models.components.attr_embeder import AttrEmbedding
 from lightning import LightningModule
 import torch
 
@@ -10,7 +10,7 @@ class Text2Attr(LightningModule):
         self.learning_rate = learning_rate
         self.student = AttrEmbedding()
         self.teacher = BERTEmbedder(n_embed=640, n_layer=32)
-        self.teacher.load_state_dict(teacher_path)
+        self.teacher.load_state_dict(torch.load(teacher_path))
         self.teacher.requires_grad_(False)
         self.teacher.eval()
 
