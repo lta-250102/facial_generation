@@ -29,7 +29,7 @@ class Text2Attr(LightningModule):
         # Calculate the soft targets loss. Scaled by T**2 as suggested by the authors of the paper "Distilling the knowledge in a neural network"
         loss = torch.sum(soft_targets * (soft_targets.log() - soft_prob)) / soft_prob.size()[0] * 4
 
-        self.log(f'{"train" if self.training else "val"}_loss', loss)
+        self.log(f'{"train" if self.training else "val"}_loss', loss, prog_bar=True)
         return loss
     
     def training_step(self, batch):
