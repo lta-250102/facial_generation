@@ -271,7 +271,7 @@ class CollaDiffusionModule(LightningModule):
         if hasattr(self.scheduler, "set_begin_index"):
             self.scheduler.set_begin_index(t_start * self.scheduler.order)
 
-        return timesteps
+        return timesteps.to(device=device)
 
     def forward(self, batch):
         clean_images = batch['image'].to(dtype=self.dtype, device=self.device)
