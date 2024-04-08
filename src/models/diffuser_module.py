@@ -3,6 +3,7 @@ from ldm.models.autoencoder import AutoencoderKL as LDMAutoencoderKL
 from ldm.modules.diffusionmodules.openaimodel import UNetModel
 from src.models.components.attr_embeder import AttrEmbedding
 from transformers import CLIPTextModel, CLIPTokenizer
+from ldm.modules.encoders.modules import BERTEmbedder
 from lightning.pytorch.loggers import WandbLogger
 from lightning import LightningModule
 from diffusers import DDIMScheduler
@@ -130,16 +131,20 @@ class DiffusionModule(LightningModule):
         return optimizer
 
 class RawDiffusionModule(LightningModule):
-    def __init__(self, diffusion_pretrained: str, learning_rate=1e-4, scheduler_prediction_type="v_prediction", emb_dim=64, **kwargs) -> None:
+    def __init__(self, diffusion_pretrained: str, learning_rate=1e-4, scheduler_prediction_type="v_prediction", **kwargs) -> None:
         super().__init__(**kwargs)
         self.learning_rate = learning_rate
         self.loss = torch.nn.functional.mse_loss
         self.scheduler = DDPMScheduler(num_train_timesteps=1000, prediction_type=scheduler_prediction_type)
-        self.unet = UNet2DConditionModel(block_out_channels=(64, 128, 256, 256), cross_attention_dim=emb_dim)
+        # self.unet = UNet2DConditionModel(block_out_channels=(64, 128, 256, 256), cross_attention_dim=emb_dim)
+        self.unet = UNet2DConditionModel.from_pretrained(diffusion_pretrained, subfolder='unet')
         self.vae = AutoencoderKL.from_pretrained(diffusion_pretrained, subfolder='vae')
         self.vae.requires_grad_(False)
         self.vae_scale_factor = 2 ** (len(self.vae.config.block_out_channels) - 1)
-        self.embeder = torch.nn.Embedding(40, emb_dim)
+        # self.embeder = torch.nn.Embedding(40, emb_dim)
+        self.embeder = AttrEmbedding()
+        self.embeder.load_state_dict(torch.load('./pretrained/attr_embeder.pt'))
+        self.linear = torch.nn.Linear(640, 768)
         
     def forward(self, noise_images, timesteps, cond):
         first_dtype = noise_images.dtype
@@ -151,7 +156,7 @@ class RawDiffusionModule(LightningModule):
     
     @torch.no_grad()
     def preprocess(self, batch):
-        clean_images, attr = batch['image'], batch['attr']+1
+        clean_images, attr = batch['image'], (batch['attr']+1)/2
         batch_size = clean_images.shape[0]
 
         clean_images = torch.cat([self.vae.encode(clean_images[i : i + 1]).latent_dist.sample() for i in range(batch_size)], dim=0) * self.vae.config.scaling_factor
@@ -188,7 +193,7 @@ class RawDiffusionModule(LightningModule):
         self.log('val_loss', loss)
 
     def inference_step(self, attr, max_timesteps=20, guidance_scale=7.5, img_size=256):
-        attr_embed = self.embeder(attr+1)
+        attr_embed = self.linear(self.embeder((attr+1)/2))
         cond = torch.cat([torch.zeros(attr_embed.shape, device=self.unet.device), attr_embed.to(self.unet.device)], dim=0)
         self.scheduler.set_timesteps(max_timesteps)
         timesteps = self.scheduler.timesteps # (20,)
@@ -225,7 +230,7 @@ class RawDiffusionModule(LightningModule):
         image.save(f'./logs/outputs/{id}.jpg')
 
 class CollaDiffusionModule(LightningModule):
-    def __init__(self, learning_rate = 1e-4, unet_path = './pretrained/unet.pt', vae_path = './pretrained/256_vae.ckpt', fine_tune = True, *args, **kwargs) -> None:
+    def __init__(self, learning_rate = 1e-4, state_dict_path = './pretrained/colla_module.pt', fine_tune = True, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         assert torch.cuda.is_available(), 'cuda unavailable'
         self.learning_rate = learning_rate
@@ -234,10 +239,8 @@ class CollaDiffusionModule(LightningModule):
                  num_res_blocks=2, channel_mult=[1, 2, 3, 5], num_heads=32, 
                  use_spatial_transformer=True, transformer_depth=1, context_dim=640, 
                  use_checkpoint=True, legacy=False)
-        if fine_tune:
-            self.unet.load_state_dict(torch.load(unet_path))
         self.vae = LDMAutoencoderKL(embed_dim=3, 
-                                    ckpt_path=vae_path if fine_tune else None,
+                                    ckpt_path=None,
                                     lossconfig={'target': 'torch.nn.Identity'},
                                     ddconfig={
                                         'double_z':True,
@@ -252,8 +255,23 @@ class CollaDiffusionModule(LightningModule):
                                         'dropout':0.0
                                     })
         self.embeder = AttrEmbedding()
+        self.text_encoder = BERTEmbedder(n_embed=640, n_layer=32)
         self.scheduler = DDIMScheduler(num_train_timesteps=1000, beta_start=1e-4, beta_end=2e-2, beta_schedule='linear')
         self.scale_factor = 0.058
+        if fine_tune:
+            self.load_state_dict(torch.load(state_dict_path(), map_location='cpu'))
+            self.text_encoder.requires_grad_(False)
+
+    def get_timesteps(self, num_inference_steps, strength, device):
+        # get the original timestep using init_timestep
+        init_timestep = min(int(num_inference_steps * strength), num_inference_steps)
+
+        t_start = max(num_inference_steps - init_timestep, 0)
+        timesteps = self.scheduler.timesteps[t_start * self.scheduler.order :]
+        if hasattr(self.scheduler, "set_begin_index"):
+            self.scheduler.set_begin_index(t_start * self.scheduler.order)
+
+        return timesteps
 
     def forward(self, batch):
         clean_images = batch['image'].to(dtype=self.dtype, device=self.device)
@@ -277,17 +295,29 @@ class CollaDiffusionModule(LightningModule):
     def validation_step(self, batch):
         return self(batch)
 
+    def postprocess(self, x_0_batch):
+        x_0 = x_0_batch[0, :, :, :].unsqueeze(0)  # [1, 3, 256, 256]
+        x_0 = x_0.permute(0, 2, 3, 1).to('cpu').numpy()
+        x_0 = (x_0 + 1.0) * 127.5
+        np.clip(x_0, 0, 255, out=x_0)  # clip to range 0 to 255
+        x_0 = x_0.astype(np.uint8)
+        image = Image.fromarray(x_0[0])
+        return image
+
     @torch.no_grad()
-    def gen_image(self, attr):
-        guidance_scale = True
-        attr = ((attr+1)/2).to(dtype=torch.int32, device=self.device)        
+    def edit_image(self, image: Image.Image, strength, attr, guidance_scale = False, num_inference_steps=20):
+        attr = ((attr+1)/2).to(dtype=torch.int32, device=self.device)
+        image = torch.from_numpy((np.array(image.convert('RGB')).astype(np.float32) / 127.5 - 1).transpose(2, 0, 1)).to(dtype=self.dtype, device=self.device).unsqueeze(0)
 
         attr_embed = self.embeder(attr)
         cond = torch.cat([torch.zeros(attr_embed.shape).to(device=attr_embed.device, dtype=attr_embed.dtype), attr_embed], dim=0) if guidance_scale else attr_embed # (2, 77, 640)
-        self.scheduler.set_timesteps(20)
-        timesteps = self.scheduler.timesteps.to(device=self.device) # (20,)
-        latents = torch.randn((1, 3, 64, 64), device=self.device, dtype=self.dtype) * self.scheduler.init_noise_sigma
-        
+        self.scheduler.set_timesteps(num_inference_steps)
+        timesteps = self.get_timesteps(num_inference_steps, strength, self.device)
+        encoded_img = self.vae.encode(image).sample() * self.scale_factor
+        noise = torch.randn(encoded_img.shape, device=self.device, dtype=self.dtype)
+        latents = self.scheduler.add_noise(encoded_img, noise, timesteps[0]) * self.scheduler.init_noise_sigma
+
+        intermediate = []
         for t in tqdm(timesteps):
             latent_model_input = self.scheduler.scale_model_input(torch.cat([latents] * 2) if guidance_scale else latents, t) # (2, 3, 64, 64)
             
@@ -297,26 +327,43 @@ class CollaDiffusionModule(LightningModule):
                 noise_pred = noise_pred_uncond + 7.5 * (noise_pred_text - noise_pred_uncond) # (1, 3, 64, 64)
             
             latents = self.scheduler.step(noise_pred, t, latents, return_dict=False)[0]
-        x_0_batch = self.vae.decode(latents/self.scale_factor)
+            intermediate.append(latents)
+        return [self.postprocess(self.vae.decode(latent/self.scale_factor)) for latent in intermediate]
 
-        x_0 = x_0_batch[0, :, :, :].unsqueeze(0)  # [1, 3, 256, 256]
-        x_0 = x_0.permute(0, 2, 3, 1).to('cpu').numpy()
-        x_0 = (x_0 + 1.0) * 127.5
-        np.clip(x_0, 0, 255, out=x_0)  # clip to range 0 to 255
-        x_0 = x_0.astype(np.uint8)
-        image = Image.fromarray(x_0[0])
-        return image
+    @torch.no_grad()
+    def gen_image(self, prompt, guidance_scale = False, num_inference_steps=20):
+        prompt_encoded = self.text_encoder(prompt)
+        cond = torch.cat([torch.zeros(prompt_encoded.shape).to(device=prompt_encoded.device, dtype=prompt_encoded.dtype), prompt_encoded], dim=0) if guidance_scale else prompt_encoded # (2, 77, 640)
+        self.scheduler.set_timesteps(num_inference_steps)
+        timesteps = self.scheduler.timesteps.to(device=self.device) # (20,)
+        latents = torch.randn((1, 3, 64, 64), device=self.device, dtype=self.dtype) * self.scheduler.init_noise_sigma
+        
+        intermediate = []
+        for t in tqdm(timesteps):
+            latent_model_input = self.scheduler.scale_model_input(torch.cat([latents] * 2) if guidance_scale else latents, t) # (2, 3, 64, 64)
+            
+            noise_pred = self.unet(latent_model_input, t.unsqueeze(-1), cond) # (2, 3, 64, 64)
+            if guidance_scale:
+                noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+                noise_pred = noise_pred_uncond + 7.5 * (noise_pred_text - noise_pred_uncond) # (1, 3, 64, 64)
+            
+            latents = self.scheduler.step(noise_pred, t, latents, return_dict=False)[0]
+            intermediate.append(latents)
+        return [self.postprocess(self.vae.decode(latent/self.scale_factor)) for latent in intermediate]
     
     def on_train_epoch_start(self):
         attr = torch.tensor([[-1, 1, 1, -1, -1, -1, -1, -1, -1, -1, -1, 1, -1, -1, -1, -1, -1, -1, 1, 1, -1, 1, -1, -1, 1, -1, -1, 1, -1, -1, -1, 1, 1, -1, 1, -1, 1, -1, -1, 1]])
-        image = self.gen_image(attr)
+        prompt = ''
+        images = self.gen_image(prompt)
+        edited_imgs = self.edit_image(image=images[-1], strength=0.5, attr=attr)
     
         if self.trainer and self.trainer.logger and isinstance(self.trainer.logger, WandbLogger):
-            self.trainer.logger.log_image('sample', [image])
+            self.trainer.logger.log_image('generated_images', images)
+            self.trainer.logger.log_image('edited_images', edited_imgs)
         else:
             os.makedirs('./logs/samples', exist_ok=True)
             id = len(os.listdir('./logs/samples'))
-            image.save(f'./logs/samples/{id}.jpg')
+            images[0].save(f'./logs/samples/{id}.jpg')
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.embeder.parameters(), lr=self.learning_rate)

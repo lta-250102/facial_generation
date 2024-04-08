@@ -11,12 +11,6 @@ import os
 
 class CelebAConditionalDataset(Dataset):
     def __init__(self, image_name_list, captions, attrs, image_folder, keys: list = ['image', 'caption', 'attr']):
-        self.transform = albumentations.Compose([
-            albumentations.Resize(256, 256),
-            albumentations.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
-            ToTensorV2(),
-        ])
-
         self.keys = keys
         self.image_name_list = image_name_list
         if 'caption' in keys:
@@ -34,8 +28,9 @@ class CelebAConditionalDataset(Dataset):
         
         data = {}
         if 'image' in self.keys:
-            image = np.array(Image.open(os.path.join(self.image_folder, image_name)).convert('RGB'))
-            data['image'] = self.transform(image=image)['image']
+            image = Image.open(os.path.join(self.image_folder, image_name)).convert('RGB').resize((256, 256))  # PIL image
+            image = np.array(image).astype(np.float32) / 127.5 - 1
+            data['image'] = torch.from_numpy(image).transpose(2, 0, 1)
         if 'caption' in self.keys:
             data['caption'] = self.captions.get(image_name, '').lower()
         if 'attr' in self.keys:
