@@ -30,7 +30,7 @@ class CelebAConditionalDataset(Dataset):
         if 'image' in self.keys:
             image = Image.open(os.path.join(self.image_folder, image_name)).convert('RGB').resize((256, 256))  # PIL image
             image = np.array(image).astype(np.float32) / 127.5 - 1
-            data['image'] = torch.from_numpy(image).transpose(2, 0, 1)
+            data['image'] = torch.from_numpy(image.transpose(2, 0, 1))
         if 'caption' in self.keys:
             data['caption'] = self.captions.get(image_name, '').lower()
         if 'attr' in self.keys:

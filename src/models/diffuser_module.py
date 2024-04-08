@@ -259,7 +259,7 @@ class CollaDiffusionModule(LightningModule):
         self.scheduler = DDIMScheduler(num_train_timesteps=1000, beta_start=1e-4, beta_end=2e-2, beta_schedule='linear')
         self.scale_factor = 0.058
         if fine_tune:
-            self.load_state_dict(torch.load(state_dict_path(), map_location='cpu'))
+            self.load_state_dict(torch.load(state_dict_path, map_location='cpu'))
             self.text_encoder.requires_grad_(False)
 
     def get_timesteps(self, num_inference_steps, strength, device):
@@ -366,7 +366,7 @@ class CollaDiffusionModule(LightningModule):
             images[0].save(f'./logs/samples/{id}.jpg')
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.embeder.parameters(), lr=self.learning_rate)
+        optimizer = torch.optim.AdamW(self.parameters(), lr=self.learning_rate)
         return optimizer
 
 if __name__ == '__main__':
