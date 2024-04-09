@@ -14,6 +14,10 @@ import torch
 import os
 
 
+def print_grad(m: torch.nn.Module, i, o):
+    print(f'{m.__class__}:  {o.sum()}')
+
+
 class DiffusionModule(LightningModule):
     def __init__(self, diffusion_pretrained: str, max_seq_len=77, fine_tune=True, learning_rate=1e-4, scheduler_prediction_type="v_prediction"):
         super().__init__()
@@ -239,6 +243,7 @@ class CollaDiffusionModule(LightningModule):
                  num_res_blocks=2, channel_mult=[1, 2, 3, 5], num_heads=32, 
                  use_spatial_transformer=True, transformer_depth=1, context_dim=640, 
                  use_checkpoint=True, legacy=False)
+        self.unet.register_full_backward_hook(print_grad)
         self.vae = LDMAutoencoderKL(embed_dim=3, 
                                     ckpt_path=None,
                                     lossconfig={'target': 'torch.nn.Identity'},
@@ -255,6 +260,7 @@ class CollaDiffusionModule(LightningModule):
                                         'dropout':0.0
                                     })
         self.embeder = AttrEmbedding()
+        self.embeder.register_full_backward_hook(print_grad)
         self.text_encoder = BERTEmbedder(n_embed=640, n_layer=32)
         self.scheduler = DDIMScheduler(num_train_timesteps=1000, beta_start=1e-4, beta_end=2e-2, beta_schedule='linear')
         self.scale_factor = 0.058
