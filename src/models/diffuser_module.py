@@ -15,7 +15,7 @@ import os
 
 
 def print_grad(m: torch.nn.Module, i, o):
-    print(f'{m.__class__}:  {o.sum()}')
+    print(f'{m.__class__}:  {o[0].sum()}')
 
 
 class DiffusionModule(LightningModule):
