@@ -261,6 +261,7 @@ class CollaDiffusionModule(LightningModule):
         if fine_tune:
             self.load_state_dict(torch.load(state_dict_path, map_location='cpu'))
             self.text_encoder.requires_grad_(False)
+            self.vae.requires_grad_(False)
 
     def get_timesteps(self, num_inference_steps, strength, device):
         # get the original timestep using init_timestep
