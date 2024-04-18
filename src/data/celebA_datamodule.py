@@ -26,7 +26,7 @@ class CelebAConditionalDataset(Dataset):
     def __getitem__(self, index):
         image_name = self.image_name_list[index]
         
-        data = {}
+        data = {'file_name': image_name}
         if 'image' in self.keys:
             image = Image.open(os.path.join(self.image_folder, image_name)).convert('RGB').resize((256, 256))  # PIL image
             image = np.array(image).astype(np.float32) / 127.5 - 1
@@ -44,7 +44,8 @@ class CelebAConditionalDataModule(LightningDataModule):
         caption_file='./data/celebA/captions.json',
         image_folder = './data/celebA/img_align_celeba',
         attr_file='./data/celebA/attrs.json',
-        keys: list = ['image', 'caption', 'attr']
+        keys: list = ['image', 'caption', 'attr'],
+        image_name_list = None,
     ):
         super().__init__()
         self.batch_size = batch_size
@@ -60,7 +61,7 @@ class CelebAConditionalDataModule(LightningDataModule):
                 self.attrs = json.load(f)
                 
         # list of valid image names & train test split
-        self.image_name_list = self.cal_img_name_list(image_folder)
+        self.image_name_list = self.cal_img_name_list(image_folder) if image_name_list is None else image_name_list
         self.train_name_list, self.val_name_list = train_test_split(self.image_name_list, test_size=0.02, random_state=42)
         self.image_folder = image_folder
 

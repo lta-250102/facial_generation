@@ -1,4 +1,4 @@
-from diffusers import UNet2DConditionModel, DDPMScheduler, AutoencoderKL, StableDiffusionPipeline
+from diffusers import UNet2DConditionModel, DDPMScheduler, AutoencoderKL, StableDiffusionPipeline, LEditsPPPipelineStableDiffusion
 from ldm.models.autoencoder import AutoencoderKL as LDMAutoencoderKL
 from ldm.modules.diffusionmodules.openaimodel import UNetModel
 from src.models.components.attr_embeder import AttrEmbedding
@@ -305,7 +305,7 @@ class CollaDiffusionModule(LightningModule):
         return image
 
     @torch.no_grad()
-    def edit_image(self, image: Image.Image, strength, attr, guidance_scale = False, num_inference_steps=20):
+    def edit_image(self, image: Image.Image, strength, attr, guidance_scale = False, num_inference_steps=20, return_intermediate=False):
         attr = ((attr+1)/2).to(dtype=torch.int32, device=self.device)
         image = torch.from_numpy((np.array(image.convert('RGB')).astype(np.float32) / 127.5 - 1).transpose(2, 0, 1)).to(dtype=self.dtype, device=self.device).unsqueeze(0)
 
@@ -328,10 +328,12 @@ class CollaDiffusionModule(LightningModule):
             
             latents = self.scheduler.step(noise_pred, t, latents, return_dict=False)[0]
             intermediate.append(latents)
-        return [self.postprocess(self.vae.decode(latent/self.scale_factor)) for latent in intermediate]
+        if return_intermediate:
+            return [self.postprocess(self.vae.decode(latent/self.scale_factor)) for latent in intermediate]
+        else: return self.postprocess(self.vae.decode(intermediate[-1]/self.scale_factor))
 
     @torch.no_grad()
-    def gen_image(self, prompt, guidance_scale = False, num_inference_steps=20):
+    def gen_image(self, prompt, guidance_scale = False, num_inference_steps=20, return_intermediate=False):
         prompt_encoded = self.text_encoder(prompt)
         cond = torch.cat([torch.zeros(prompt_encoded.shape).to(device=prompt_encoded.device, dtype=prompt_encoded.dtype), prompt_encoded], dim=0) if guidance_scale else prompt_encoded # (2, 77, 640)
         self.scheduler.set_timesteps(num_inference_steps)
@@ -349,7 +351,9 @@ class CollaDiffusionModule(LightningModule):
             
             latents = self.scheduler.step(noise_pred, t, latents, return_dict=False)[0]
             intermediate.append(latents)
-        return [self.postprocess(self.vae.decode(latent/self.scale_factor)) for latent in intermediate]
+        if return_intermediate:
+            return [self.postprocess(self.vae.decode(latent/self.scale_factor)) for latent in intermediate]
+        else: return self.postprocess(self.vae.decode(intermediate[-1]/self.scale_factor))
     
     def on_train_epoch_start(self):
         attr = torch.tensor([[-1, 1, 1, -1, -1, -1, -1, -1, -1, -1, -1, 1, -1, -1, -1, -1, -1, -1, 1, 1, -1, 1, -1, -1, 1, -1, -1, 1, -1, -1, -1, 1, 1, -1, 1, -1, 1, -1, -1, 1]])
