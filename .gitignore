@@ -157,3 +157,7 @@ configs/local/default.yaml
 *.ipynb
 
 /draft/
+
+clip/
+
+taming-transformers/

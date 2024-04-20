@@ -1,0 +1,4 @@
+_target_: src.models.diffuser_module.CollaDiffusionModule
+learning_rate: 5e-5
+state_dict_path: ./pretrained/colla_module.pt
+fine_tune: True

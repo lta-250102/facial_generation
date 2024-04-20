@@ -1,0 +1,3 @@
+_target_: src.models.knowledge_distilation.Text2Attr
+learning_rate: 5e-5
+teacher_path: ./pretrained/text_encoder.pt
