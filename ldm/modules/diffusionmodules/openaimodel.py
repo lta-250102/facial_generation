@@ -494,7 +494,7 @@ class UNetModel(nn.Module):
 
         # --------------- FreeU code starts -----------------------
         self.enable_freeu = enable_freeu # Ziqi added for FreeU
-        print(f'self.enable_freeu = {self.enable_freeu}') # Ziqi added for FreeU
+        # print(f'self.enable_freeu = {self.enable_freeu}') # Ziqi added for FreeU
         if self.enable_freeu:
             self.b1 = b1; print(f'b1={self.b1}')
             self.b2 = b2; print(f'b2={self.b2}')
