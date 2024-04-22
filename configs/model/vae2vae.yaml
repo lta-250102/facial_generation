@@ -1,0 +1,3 @@
+_target_: src.models.knowledge_distilation.VAE2VAE
+learning_rate: 5e-5
+teacher_path: ./pretrained/unet.pt
